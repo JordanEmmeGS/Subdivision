@@ -12,20 +12,25 @@ public struct SubdivisionJob : IJob
 
     public void Execute()
     {
-        NativeList<Vector3> tempList = new NativeList<Vector3>(Allocator.Temp) {v1, v2, v3};
+        NativeList<Vector3> tempToDivide = new NativeList<Vector3>(Allocator.Temp) {v1, v2, v3};
         
         for (int i = 0; i < numberOfSubdiv; i++)
-        {
-            for (int listIndex = 0; listIndex < tempList.Length - 1; listIndex++)
+        {           
+            NativeList<Vector3> tempDivided = new NativeList<Vector3>(Allocator.Temp);
+
+            for (int listIndex = 0; listIndex < tempToDivide.Length - 1; listIndex++)
             {
-                result.Add(Vector3.Lerp(tempList[listIndex], tempList[listIndex+1], 0.25f));
-                result.Add(Vector3.Lerp(tempList[listIndex], tempList[listIndex+1], 0.75f));
+                tempDivided.Add(Vector3.Lerp(tempToDivide[listIndex], tempToDivide[listIndex+1], 0.25f));
+                tempDivided.Add(Vector3.Lerp(tempToDivide[listIndex], tempToDivide[listIndex+1], 0.75f));
             }
-            tempList = result;
-            result = new NativeList<Vector3>();
+            tempToDivide = tempDivided;
         }
 
-        result = tempList;
+        for (int i = 0; i < tempToDivide.Length; i++)
+        {
+            Vector3 point = tempToDivide[i];
+            result.Add(point);
+        }
     }
 }
 
@@ -39,7 +44,7 @@ public class Logic : MonoBehaviour
     private GameObject currentLine;
     private LineRenderer lineRenderer;
 
-    private int numberOfSubdiv = 8;
+    private int numberOfSubdiv = 10;
 
     private void Update()
     {
@@ -52,7 +57,7 @@ public class Logic : MonoBehaviour
 
     private void SpawnPoint()
     {
-        Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition) + 10*Vector3.forward;
+        Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition) + 10 * Vector3.forward;
         Instantiate(userPoint, mousePos, Quaternion.identity);
         userPointsCoords.Add(mousePos);
     }
@@ -64,8 +69,9 @@ public class Logic : MonoBehaviour
         {
             return;
         }
-        divisionPointsCoords = userPointsCoords;
-        
+
+        divisionPointsCoords = new List<Vector3>();
+
         NativeList<JobHandle> handles = new NativeList<JobHandle>(Allocator.Temp);
 
         List<NativeList<Vector3>> results = new List<NativeList<Vector3>>();
@@ -73,23 +79,24 @@ public class Logic : MonoBehaviour
         for (int index = 1; index < userPointsCoords.Count - 1; index++)
         {
             NativeList<Vector3> result = new NativeList<Vector3>(Allocator.TempJob);
-            
+
             SubdivisionJob job = new SubdivisionJob();
-            job.v1 = userPointsCoords[index-1];
+            job.v1 = userPointsCoords[index - 1];
             job.v2 = userPointsCoords[index];
-            job.v3 = userPointsCoords[index+1];
+            job.v3 = userPointsCoords[index + 1];
             job.numberOfSubdiv = numberOfSubdiv;
-            
+
             job.result = result;
-            
+
             JobHandle handle = job.Schedule();
             handles.Add(handle);
             results.Add(result);
         }
+
         JobHandle.CompleteAll(handles);
         handles.Dispose();
-        
-        for (int index = 0; index < userPointsCoords.Count - 2; index++)
+
+        for (int index = 0; index < results.Count; index++)
         {
             for (int i = 0; i < results[index].Length; i++)
             {
@@ -98,25 +105,14 @@ public class Logic : MonoBehaviour
             }
 
             results[index].Dispose();
+
         }
     }
-    
-    /*private void Subdivision()
-    {
-        divisionPointsCoords = userPointsCoords;
-        
-        
 
-        for (int i = 0; i < numberOfSubdiv; i++)
-        {
-            SubdivisionStep();
-        }
-    }*/
-    
     private void RenderLine()
     {
         currentLine = Instantiate(linePrefab, Vector3.zero, quaternion.identity);
-        
+
         lineRenderer = currentLine.GetComponent<LineRenderer>();
         lineRenderer.positionCount = divisionPointsCoords.Count + 1;
 
@@ -124,34 +120,8 @@ public class Logic : MonoBehaviour
         {
             lineRenderer.SetPosition(i, divisionPointsCoords[i]);
         }
-        
+
         lineRenderer.SetPosition(0, userPointsCoords[0]);
-        lineRenderer.SetPosition(divisionPointsCoords.Count, userPointsCoords[userPointsCoords.Count-1]);
+        lineRenderer.SetPosition(divisionPointsCoords.Count, userPointsCoords[userPointsCoords.Count - 1]);
     }
-    
-    /*private void SubdivisionStep()
-    {
-        int vertexNumber = divisionPointsCoords.Count;
-        List<Vector3> tempList = new List<Vector3>();
-        
-        for (int i = 0; i < vertexNumber - 1; i++)
-        {
-            (Vector3 newVertex1, Vector3 newVertex2) = NewVertices(divisionPointsCoords[i], divisionPointsCoords[i + 1]);
-            {
-                tempList.Add(newVertex1);
-                tempList.Add(newVertex2);
-            }
-        }
-
-        divisionPointsCoords = tempList;
-    }
-
-    private (Vector3 newVertex1, Vector3 newVertex2) NewVertices(Vector3 v1, Vector3 v2)
-    {
-        Vector3 newVertex1 = Vector3.Lerp(v1, v2, 0.25f);
-        Vector3 newVertex2 = Vector3.Lerp(v1, v2, 0.75f);
-        
-        return (newVertex1, newVertex2);
-    }*/
-    
 }
