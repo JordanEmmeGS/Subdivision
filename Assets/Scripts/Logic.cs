@@ -4,124 +4,177 @@ using UnityEngine;
 using Unity.Jobs;
 using Unity.Mathematics;
 
-public struct SubdivisionJob : IJob
-{
-    public Vector3 v1, v2, v3;
-    public int numberOfSubdiv;
-    public NativeList<Vector3> result;
-
-    public void Execute()
-    {
-        NativeList<Vector3> tempToDivide = new NativeList<Vector3>(Allocator.Temp) {v1, v2, v3};
-        
-        for (int i = 0; i < numberOfSubdiv; i++)
-        {           
-            NativeList<Vector3> tempDivided = new NativeList<Vector3>(Allocator.Temp);
-
-            for (int listIndex = 0; listIndex < tempToDivide.Length - 1; listIndex++)
-            {
-                tempDivided.Add(Vector3.Lerp(tempToDivide[listIndex], tempToDivide[listIndex+1], 0.25f));
-                tempDivided.Add(Vector3.Lerp(tempToDivide[listIndex], tempToDivide[listIndex+1], 0.75f));
-            }
-            tempToDivide = tempDivided;
-        }
-
-        for (int i = 0; i < tempToDivide.Length; i++)
-        {
-            Vector3 point = tempToDivide[i];
-            result.Add(point);
-        }
-    }
-}
-
 public class Logic : MonoBehaviour
 {
     [SerializeField] private GameObject userPoint;
-    private List<Vector3> userPointsCoords = new List<Vector3>();
-    private List<Vector3> divisionPointsCoords = new List<Vector3>();
-
     [SerializeField] private GameObject linePrefab;
+    
     private GameObject currentLine;
     private LineRenderer lineRenderer;
 
-    private int numberOfSubdiv = 10;
+    private Subdivision.Calculator subdivisionCalculator = new Subdivision.Calculator();
 
     private void Update()
     {
-        if (!Input.GetMouseButtonDown(0)) return;
-        SpawnPoint();
-        Subdivision();
-        Destroy(currentLine);
-        RenderLine();
-    }
-
-    private void SpawnPoint()
-    {
-        Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition) + 10 * Vector3.forward;
-        Instantiate(userPoint, mousePos, Quaternion.identity);
-        userPointsCoords.Add(mousePos);
-    }
-
-
-    private void Subdivision()
-    {
-        if (userPointsCoords.Count < 3)
+        if (!Input.GetMouseButtonDown(0))
         {
             return;
         }
 
-        divisionPointsCoords = new List<Vector3>();
-
-        NativeList<JobHandle> handles = new NativeList<JobHandle>(Allocator.Temp);
-
-        List<NativeList<Vector3>> results = new List<NativeList<Vector3>>();
-
-        for (int index = 1; index < userPointsCoords.Count - 1; index++)
-        {
-            NativeList<Vector3> result = new NativeList<Vector3>(Allocator.TempJob);
-
-            SubdivisionJob job = new SubdivisionJob();
-            job.v1 = userPointsCoords[index - 1];
-            job.v2 = userPointsCoords[index];
-            job.v3 = userPointsCoords[index + 1];
-            job.numberOfSubdiv = numberOfSubdiv;
-
-            job.result = result;
-
-            JobHandle handle = job.Schedule();
-            handles.Add(handle);
-            results.Add(result);
-        }
-
-        JobHandle.CompleteAll(handles);
-        handles.Dispose();
-
-        for (int index = 0; index < results.Count; index++)
-        {
-            for (int i = 0; i < results[index].Length; i++)
-            {
-                Vector3 coord = results[index][i];
-                divisionPointsCoords.Add(coord);
-            }
-
-            results[index].Dispose();
-
-        }
+        Vector3 mousePos = ReturnMousePos();
+        SpawnPointAt(mousePos);
+        subdivisionCalculator.UpdateControlPointList(mousePos);
+        subdivisionCalculator.UpdateSubdividedVertexList();
+        Destroy(currentLine);
+        RenderLine(subdivisionCalculator.data.subdividedVertexList);
     }
 
-    private void RenderLine()
+    private void SpawnPointAt(Vector3 mousePos)
+    {
+        Instantiate(userPoint, mousePos, Quaternion.identity);
+    }
+
+    private Vector3 ReturnMousePos()
+    {
+        Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition) + 10 * Vector3.forward;
+        return mousePos;
+    }
+    
+
+    private void RenderLine(List<Vector3> subdividedVertexList)
     {
         currentLine = Instantiate(linePrefab, Vector3.zero, quaternion.identity);
 
         lineRenderer = currentLine.GetComponent<LineRenderer>();
-        lineRenderer.positionCount = divisionPointsCoords.Count + 1;
+        lineRenderer.positionCount = subdividedVertexList.Count;
 
-        for (int i = 1; i < divisionPointsCoords.Count; i++)
+        for (int i = 0; i < subdividedVertexList.Count; i++)
         {
-            lineRenderer.SetPosition(i, divisionPointsCoords[i]);
+            lineRenderer.SetPosition(i, subdividedVertexList[i]);
+        }
+    }
+}
+
+namespace Subdivision
+{
+    public class Data
+    {
+        public List<Vector3> controlPointList = new List<Vector3>();
+        public List<Vector3> subdividedVertexList = new List<Vector3>();
+        
+        public int numberOfSubdiv = 10;
+    }
+    
+    public class Calculator
+    {
+        public Data data = new Data();
+
+        public void UpdateControlPointList(Vector3 newVertex)
+        {
+            data.controlPointList.Add(newVertex);
+        }
+    
+        public void UpdateSubdividedVertexList()
+        {
+            if (data.controlPointList.Count < 3)
+            {
+                return;
+            }
+            
+            data.subdividedVertexList = new List<Vector3>();
+            
+            (NativeList<JobHandle> handleList, List<NativeList<Vector3>> tripletDivisionList) =
+                ScheduleAllSubdivisionJobs();
+
+            JobHandle.CompleteAll(handleList);
+            handleList.Dispose();
+            MergeAndDisposeTripletDivisionList(tripletDivisionList);
+            AddFirstAndLastControlPoints();
         }
 
-        lineRenderer.SetPosition(0, userPointsCoords[0]);
-        lineRenderer.SetPosition(divisionPointsCoords.Count, userPointsCoords[userPointsCoords.Count - 1]);
+        private (NativeList<JobHandle>, List<NativeList<Vector3>>) ScheduleAllSubdivisionJobs()
+        {
+            NativeList<JobHandle> handleList = new NativeList<JobHandle>(Allocator.Temp);
+
+            List<NativeList<Vector3>> tripletDivisionList = new List<NativeList<Vector3>>();
+
+            for (int vertexIndex = 1; vertexIndex < data.controlPointList.Count - 1; vertexIndex++)
+            {
+                (JobHandle handle, NativeList<Vector3> tripletDivision) = ScheduleSingleSubdivisionJob(vertexIndex);
+                handleList.Add(handle);
+                tripletDivisionList.Add(tripletDivision);
+            }
+
+            return (handleList, tripletDivisionList);
+        }
+
+        private void MergeAndDisposeTripletDivisionList(List<NativeList<Vector3>> tripletDivisionList)
+        {
+            for (int index = 0; index < tripletDivisionList.Count; index++)
+            {
+                for (int i = 0; i < tripletDivisionList[index].Length; i++)
+                {
+                    Vector3 coord = tripletDivisionList[index][i];
+                    data.subdividedVertexList.Add(coord);
+                }
+
+                tripletDivisionList[index].Dispose();
+
+            }
+        }
+
+        private void AddFirstAndLastControlPoints()
+        {
+            data.subdividedVertexList.Insert(0,data.controlPointList[0]);
+            data.subdividedVertexList.Add(data.controlPointList[data.controlPointList.Count - 1]);
+        }
+
+        private (JobHandle, NativeList<Vector3>) ScheduleSingleSubdivisionJob(int vertexIndex)
+        {
+            NativeList<Vector3> tripletDivision = new NativeList<Vector3>(Allocator.TempJob);
+
+            Job job = new Job();
+            
+            job.v1 = data.controlPointList[vertexIndex - 1];
+            job.v2 = data.controlPointList[vertexIndex];
+            job.v3 = data.controlPointList[vertexIndex + 1];
+            job.numberOfSubdiv = data.numberOfSubdiv;
+            job.tripletDivision = tripletDivision;
+
+            JobHandle handle = job.Schedule();
+
+            return (handle, tripletDivision);
+        }
+    
+    }
+
+    public struct Job : IJob
+    {
+        public Vector3 v1, v2, v3;
+        public int numberOfSubdiv;
+        public NativeList<Vector3> tripletDivision;
+
+        public void Execute()
+        {
+            NativeList<Vector3> tempToDivide = new NativeList<Vector3>(Allocator.Temp) {v1, v2, v3};
+    
+            for (int i = 0; i < numberOfSubdiv; i++)
+            {           
+                NativeList<Vector3> tempDivided = new NativeList<Vector3>(Allocator.Temp);
+
+                for (int listIndex = 0; listIndex < tempToDivide.Length - 1; listIndex++)
+                {
+                    tempDivided.Add(Vector3.Lerp(tempToDivide[listIndex], tempToDivide[listIndex+1], 0.25f));
+                    tempDivided.Add(Vector3.Lerp(tempToDivide[listIndex], tempToDivide[listIndex+1], 0.75f));
+                }
+                tempToDivide = tempDivided;
+            }
+
+            for (int i = 0; i < tempToDivide.Length; i++)
+            {
+                Vector3 point = tempToDivide[i];
+                tripletDivision.Add(point);
+            }
+        }
     }
 }
