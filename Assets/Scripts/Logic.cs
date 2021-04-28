@@ -12,26 +12,36 @@ public class Logic : MonoBehaviour
     private GameObject currentLine;
     private LineRenderer lineRenderer;
 
+    private bool controlPointDragged = false;
+
     private Subdivision.Calculator subdivisionCalculator = new Subdivision.Calculator();
 
     private void Update()
     {
-        if (!Input.GetMouseButtonDown(0))
+        if (Input.GetMouseButtonDown(1))
         {
-            return;
+            Vector3 mousePos = ReturnMousePos();
+            SpawnPointAt(mousePos);
+            subdivisionCalculator.UpdateControlPointList(mousePos);
+            subdivisionCalculator.UpdateSubdividedVertexList();
+            Destroy(currentLine);
+            RenderLine(subdivisionCalculator.data.subdividedVertexList);
         }
 
-        Vector3 mousePos = ReturnMousePos();
-        SpawnPointAt(mousePos);
-        subdivisionCalculator.UpdateControlPointList(mousePos);
-        subdivisionCalculator.UpdateSubdividedVertexList();
-        Destroy(currentLine);
-        RenderLine(subdivisionCalculator.data.subdividedVertexList);
+        else if (controlPointDragged)
+        {
+            subdivisionCalculator.UpdateSubdividedVertexList();
+            Destroy(currentLine);
+            RenderLine(subdivisionCalculator.data.subdividedVertexList);
+
+            controlPointDragged = false;
+        }
     }
 
     private void SpawnPointAt(Vector3 mousePos)
     {
-        Instantiate(userPoint, mousePos, Quaternion.identity);
+        GameObject point = Instantiate(userPoint, mousePos, Quaternion.identity);
+        point.transform.parent = transform;
     }
 
     private Vector3 ReturnMousePos()
@@ -39,7 +49,12 @@ public class Logic : MonoBehaviour
         Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition) + 10 * Vector3.forward;
         return mousePos;
     }
-    
+
+    private void UpdateDraggedControlPoint((int index, Vector3 mousePosDrag) message)
+    {
+        subdivisionCalculator.data.controlPointList[message.index] = message.mousePosDrag;
+        controlPointDragged = true;
+    }
 
     private void RenderLine(List<Vector3> subdividedVertexList)
     {
