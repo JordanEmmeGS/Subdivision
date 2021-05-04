@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Burst;
 using Unity.Collections;
 using UnityEngine;
 using Unity.Jobs;
@@ -163,6 +164,7 @@ namespace Subdivision
     
     }
 
+    [BurstCompile]
     public struct Job : IJob
     {
         public Vector3 v1, v2, v3;
